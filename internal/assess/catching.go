@@ -42,6 +42,7 @@ func (a *CatchingAssessor) Assess(result *model.TestResult) {
 		return
 	}
 	result.IsCatching = true
+	result.Confidence = 1.0
 }
 
 // TrivialMutantFilter reduces confidence for trivial mutations.

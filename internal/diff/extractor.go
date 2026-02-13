@@ -37,7 +37,7 @@ func (e *Extractor) runGitDiff(staged bool, commit string) (string, error) {
 	var args []string
 	switch {
 	case commit != "":
-		args = []string{"diff", commit + "~1", commit}
+		args = []string{"diff-tree", "-p", "--root", commit}
 	case staged:
 		args = []string{"diff", "--cached"}
 	default:

@@ -28,26 +28,6 @@ func NewExecutor(moduleDir string, language lang.Language, timeout time.Duration
 	}
 }
 
-// Execute runs a single test against original code and then mutated code.
-// Returns a TestResult indicating whether the test is catching.
-func (e *Executor) Execute(test model.GeneratedTest, mutant model.Mutant) (model.TestResult, error) {
-	result := model.TestResult{
-		Test:   test,
-		Mutant: mutant,
-	}
-
-	// Determine relative path of the target file from the module root
-	relPath, err := filepath.Rel(e.moduleDir, test.FuncName)
-	if err != nil {
-		// FuncName is actually the function name, we need the file path
-		// We'll get it from the mutant's context. For now, this is passed through pipeline.
-		return result, fmt.Errorf("cannot determine relative path: %w", err)
-	}
-	_ = relPath
-
-	return result, fmt.Errorf("Execute should be called via ExecuteWithFile")
-}
-
 // ExecuteWithFile runs a test against original and mutated code for a specific file.
 func (e *Executor) ExecuteWithFile(test model.GeneratedTest, mutant model.Mutant, filePath string, originalSource []byte) (model.TestResult, error) {
 	result := model.TestResult{

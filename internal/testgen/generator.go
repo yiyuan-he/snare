@@ -125,11 +125,10 @@ func (g *Generator) callAndParse(ctx context.Context, prompt string, fn model.Ch
 	}
 
 	// Validate test syntax
-	for i, t := range llmResp.Tests {
+	for _, t := range llmResp.Tests {
 		if err := g.lang.ValidateTestSyntax([]byte(t.TestCode)); err != nil {
 			return nil, nil, fmt.Errorf("test %s has syntax error: %w\ncode:\n%s", t.TestName, err, t.TestCode)
 		}
-		_ = i
 	}
 
 	return llmResp.Mutants, llmResp.Tests, nil

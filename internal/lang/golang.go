@@ -82,6 +82,11 @@ func (g *Go) ApplyMutant(originalSource []byte, original string, mutated string)
 	if result == string(originalSource) {
 		return nil, fmt.Errorf("original snippet not found in source")
 	}
+	// Validate that the mutated source is still valid Go
+	fset := token.NewFileSet()
+	if _, err := parser.ParseFile(fset, "", result, parser.AllErrors); err != nil {
+		return nil, fmt.Errorf("mutated code is not valid Go: %w", err)
+	}
 	return []byte(result), nil
 }
 
