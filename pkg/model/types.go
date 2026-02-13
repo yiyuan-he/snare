@@ -69,6 +69,14 @@ type TestResult struct {
 	FilteredReason string
 }
 
+// MutantSummary aggregates test results for a single mutant.
+type MutantSummary struct {
+	Mutant         Mutant
+	Tests          []TestResult
+	IsCaught       bool
+	BestConfidence float64
+}
+
 // PipelineResult holds the overall result of a pipeline run.
 type PipelineResult struct {
 	FilesAnalyzed    int
