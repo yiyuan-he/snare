@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	bedrockpkg "github.com/anthropics/anthropic-sdk-go/bedrock"
 	"github.com/yiyuanh/snare/internal/lang"
 	"github.com/yiyuanh/snare/pkg/model"
 )
@@ -21,8 +22,15 @@ type Generator struct {
 }
 
 // NewGenerator creates a new LLM-based test generator.
-func NewGenerator(apiKey string, modelID string, language lang.Language, maxTests int, verbose bool) *Generator {
-	client := anthropic.NewClient()
+// When bedrock is true, the client uses AWS credentials via the default config chain
+// instead of ANTHROPIC_API_KEY.
+func NewGenerator(ctx context.Context, modelID string, language lang.Language, maxTests int, verbose bool, bedrock bool) *Generator {
+	var client anthropic.Client
+	if bedrock {
+		client = anthropic.NewClient(bedrockpkg.WithLoadDefaultConfig(ctx))
+	} else {
+		client = anthropic.NewClient()
+	}
 	return &Generator{
 		client:   &client,
 		model:    modelID,

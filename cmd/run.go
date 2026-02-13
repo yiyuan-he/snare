@@ -27,6 +27,7 @@ var (
 	flagVerbose  bool
 	flagDryRun   bool
 	flagTimeout  time.Duration
+	flagBedrock  bool
 )
 
 func init() {
@@ -38,13 +39,14 @@ func init() {
 	runCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose output")
 	runCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Generate tests but don't execute them")
 	runCmd.Flags().DurationVar(&flagTimeout, "timeout", 30*time.Second, "Timeout for each test execution")
+	runCmd.Flags().BoolVar(&flagBedrock, "bedrock", false, "Use Amazon Bedrock instead of the Anthropic API")
 	rootCmd.AddCommand(runCmd)
 }
 
 func runJiT(cmd *cobra.Command, args []string) error {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required")
+	if apiKey == "" && !flagBedrock {
+		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required (or use --bedrock)")
 	}
 
 	opts := pipeline.Options{
@@ -57,6 +59,7 @@ func runJiT(cmd *cobra.Command, args []string) error {
 		DryRun:   flagDryRun,
 		Timeout:  flagTimeout,
 		APIKey:   apiKey,
+		Bedrock:  flagBedrock,
 	}
 
 	p := pipeline.New(opts)

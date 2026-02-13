@@ -27,6 +27,7 @@ type Options struct {
 	DryRun   bool
 	Timeout  time.Duration
 	APIKey   string
+	Bedrock  bool
 }
 
 // Pipeline orchestrates the 5-stage JiT test generation process.
@@ -104,7 +105,7 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		fmt.Println("Stage 3: Generating mutants and tests via Claude...")
 	}
 	goLang := lang.NewGo()
-	gen := testgen.NewGenerator(p.opts.APIKey, p.opts.Model, goLang, p.opts.MaxTests, p.opts.Verbose)
+	gen := testgen.NewGenerator(ctx, p.opts.Model, goLang, p.opts.MaxTests, p.opts.Verbose, p.opts.Bedrock)
 
 	type genResult struct {
 		fn      model.ChangedFunc

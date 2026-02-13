@@ -9,7 +9,7 @@ tells you how well your tests guard against real bugs.
 
 - Go 1.25+
 - git
-- An [Anthropic API key](https://console.anthropic.com/)
+- An [Anthropic API key](https://console.anthropic.com/) **or** AWS credentials with access to [Amazon Bedrock](https://aws.amazon.com/bedrock/)
 
 ## Install
 
@@ -58,6 +58,24 @@ snare run [flags]
 | `-v`, `--verbose` | `false` | Show detailed output |
 | `--dry-run` | `false` | Generate mutants and tests without executing |
 | `--timeout <dur>` | `30s` | Timeout per test execution |
+| `--bedrock` | `false` | Use Amazon Bedrock instead of the Anthropic API |
+
+## Bedrock
+
+To use Claude via [Amazon Bedrock](https://aws.amazon.com/bedrock/) instead of the
+Anthropic API, pass the `--bedrock` flag. snare uses the standard AWS credential
+chain (`~/.aws/credentials`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` env vars,
+IAM roles, etc.), so no `ANTHROPIC_API_KEY` is needed.
+
+```bash
+# Ensure AWS credentials and region are configured
+export AWS_REGION=us-east-1
+
+snare run --bedrock --model us.anthropic.claude-sonnet-4-5-20250929-v2:0
+```
+
+You must specify a Bedrock model ID with `--model` (the default model ID is for the
+direct Anthropic API and won't work with Bedrock).
 
 ## How it works
 
