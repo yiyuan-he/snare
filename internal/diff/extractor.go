@@ -22,6 +22,7 @@ func NewExtractor(dir string) *Extractor {
 
 // Extract runs the appropriate git diff command and parses the output.
 // It filters results to only include .go files (excluding test files).
+// It also retrieves the parent version of each changed file.
 func (e *Extractor) Extract(staged bool, commit string) ([]model.FileDiff, error) {
 	raw, err := e.runGitDiff(staged, commit)
 	if err != nil {
@@ -30,7 +31,22 @@ func (e *Extractor) Extract(staged bool, commit string) ([]model.FileDiff, error
 	if len(raw) == 0 {
 		return nil, nil
 	}
-	return e.parse(raw)
+	diffs, err := e.parse(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch parent source for each file
+	for i := range diffs {
+		parentSrc, err := e.getParentSource(diffs[i].OldName, staged, commit)
+		if err != nil {
+			// Not fatal — file might be newly added (no parent)
+			continue
+		}
+		diffs[i].ParentSource = parentSrc
+	}
+
+	return diffs, nil
 }
 
 func (e *Extractor) runGitDiff(staged bool, commit string) (string, error) {
@@ -54,6 +70,31 @@ func (e *Extractor) runGitDiff(staged bool, commit string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// getParentSource retrieves the file content at the parent revision.
+func (e *Extractor) getParentSource(filePath string, staged bool, commit string) ([]byte, error) {
+	if filePath == "" {
+		return nil, fmt.Errorf("no old file path (new file)")
+	}
+
+	var args []string
+	switch {
+	case commit != "":
+		// Parent of the specified commit
+		args = []string{"show", commit + "^:" + filePath}
+	default:
+		// For both staged and unstaged changes, parent is HEAD
+		args = []string{"show", "HEAD:" + filePath}
+	}
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = e.Dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show parent: %w", err)
+	}
+	return out, nil
 }
 
 func (e *Extractor) parse(raw string) ([]model.FileDiff, error) {

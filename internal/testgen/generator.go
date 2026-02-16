@@ -40,18 +40,35 @@ func NewGenerator(ctx context.Context, modelID string, language lang.Language, m
 	}
 }
 
-// Generate produces mutants and tests for a changed function.
-// It makes a single API call per function and includes one retry on parse failure.
-func (g *Generator) Generate(ctx context.Context, fn model.ChangedFunc) ([]model.Mutant, []model.GeneratedTest, error) {
-	prompt := BuildPrompt(fn)
+// NewGeneratorWithClient creates a generator with a pre-configured client.
+// Used by the LLM judge and other components that share a client.
+func NewGeneratorWithClient(client *anthropic.Client, modelID string, language lang.Language, maxTests int, verbose bool) *Generator {
+	return &Generator{
+		client:   client,
+		model:    modelID,
+		lang:     language,
+		maxTests: maxTests,
+		verbose:  verbose,
+	}
+}
 
-	mutants, tests, err := g.callAndParse(ctx, prompt, fn)
+// Client returns the underlying anthropic client for reuse by other components.
+func (g *Generator) Client() *anthropic.Client {
+	return g.client
+}
+
+// Generate produces intent, risks, mutants and tests for a changed function.
+// It makes a single API call per function and includes one retry on parse failure.
+func (g *Generator) Generate(ctx context.Context, fn model.ChangedFunc) (string, []model.Risk, []model.Mutant, []model.GeneratedTest, error) {
+	prompt := BuildCatchingPrompt(fn)
+
+	intent, risks, mutants, tests, err := g.callAndParse(ctx, prompt, fn)
 	if err != nil {
 		// One retry with error context
 		retryPrompt := prompt + "\n\n## Previous attempt failed\nError: " + err.Error() + "\nPlease fix the issue and try again. Remember to output ONLY valid JSON."
-		mutants, tests, err = g.callAndParse(ctx, retryPrompt, fn)
+		intent, risks, mutants, tests, err = g.callAndParse(ctx, retryPrompt, fn)
 		if err != nil {
-			return nil, nil, fmt.Errorf("generation failed after retry: %w", err)
+			return "", nil, nil, nil, fmt.Errorf("generation failed after retry: %w", err)
 		}
 	}
 
@@ -72,10 +89,10 @@ func (g *Generator) Generate(ctx context.Context, fn model.ChangedFunc) ([]model
 		mutants = filteredMutants
 	}
 
-	return mutants, tests, nil
+	return intent, risks, mutants, tests, nil
 }
 
-func (g *Generator) callAndParse(ctx context.Context, prompt string, fn model.ChangedFunc) ([]model.Mutant, []model.GeneratedTest, error) {
+func (g *Generator) callAndParse(ctx context.Context, prompt string, fn model.ChangedFunc) (string, []model.Risk, []model.Mutant, []model.GeneratedTest, error) {
 	resp, err := g.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.Model(g.model),
 		MaxTokens: 4096,
@@ -84,7 +101,7 @@ func (g *Generator) callAndParse(ctx context.Context, prompt string, fn model.Ch
 		},
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("Claude API call: %w", err)
+		return "", nil, nil, nil, fmt.Errorf("Claude API call: %w", err)
 	}
 
 	// Extract text from response
@@ -97,23 +114,23 @@ func (g *Generator) callAndParse(ctx context.Context, prompt string, fn model.Ch
 	}
 
 	if text == "" {
-		return nil, nil, fmt.Errorf("empty response from Claude")
+		return "", nil, nil, nil, fmt.Errorf("empty response from Claude")
 	}
 
 	// Strip markdown code fences if present
 	text = stripCodeFences(text)
 
 	// Parse JSON response
-	var llmResp model.LLMResponse
+	var llmResp model.CatchingLLMResponse
 	if err := json.Unmarshal([]byte(text), &llmResp); err != nil {
-		return nil, nil, fmt.Errorf("parsing LLM response JSON: %w (response: %.500s)", err, text)
+		return "", nil, nil, nil, fmt.Errorf("parsing LLM response JSON: %w (response: %.500s)", err, text)
 	}
 
 	if len(llmResp.Mutants) == 0 {
-		return nil, nil, fmt.Errorf("no mutants generated")
+		return "", nil, nil, nil, fmt.Errorf("no mutants generated")
 	}
 	if len(llmResp.Tests) == 0 {
-		return nil, nil, fmt.Errorf("no tests generated")
+		return "", nil, nil, nil, fmt.Errorf("no tests generated")
 	}
 
 	// Set func name on all mutants and tests
@@ -127,11 +144,11 @@ func (g *Generator) callAndParse(ctx context.Context, prompt string, fn model.Ch
 	// Validate test syntax
 	for _, t := range llmResp.Tests {
 		if err := g.lang.ValidateTestSyntax([]byte(t.TestCode)); err != nil {
-			return nil, nil, fmt.Errorf("test %s has syntax error: %w\ncode:\n%s", t.TestName, err, t.TestCode)
+			return "", nil, nil, nil, fmt.Errorf("test %s has syntax error: %w\ncode:\n%s", t.TestName, err, t.TestCode)
 		}
 	}
 
-	return llmResp.Mutants, llmResp.Tests, nil
+	return llmResp.Intent, llmResp.Risks, llmResp.Mutants, llmResp.Tests, nil
 }
 
 func stripCodeFences(s string) string {

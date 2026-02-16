@@ -9,13 +9,13 @@ import (
 func TestChain_CompilationFailure(t *testing.T) {
 	results := []model.TestResult{
 		{
-			PassOriginal:   true,
-			FailMutant:     true,
-			OriginalOutput: "[build failed]",
+			PassParent:   true,
+			FailDiff:     true,
+			ParentOutput: "[build failed]",
 		},
 	}
 
-	chain := DefaultChain()
+	chain := DefaultRuleOnlyChain()
 	evaluated := chain.Evaluate(results)
 
 	r := evaluated[0]
@@ -27,20 +27,20 @@ func TestChain_CompilationFailure(t *testing.T) {
 	}
 }
 
-func TestChain_FailsOnOriginal(t *testing.T) {
+func TestChain_FailsOnParent(t *testing.T) {
 	results := []model.TestResult{
 		{
-			PassOriginal: false,
-			FailMutant:   true,
+			PassParent: false,
+			FailDiff:   true,
 		},
 	}
 
-	chain := DefaultChain()
+	chain := DefaultRuleOnlyChain()
 	evaluated := chain.Evaluate(results)
 
 	r := evaluated[0]
-	if r.FilteredReason != "fails on original code" {
-		t.Errorf("FilteredReason = %q, want %q", r.FilteredReason, "fails on original code")
+	if r.FilteredReason != "fails on parent code" {
+		t.Errorf("FilteredReason = %q, want %q", r.FilteredReason, "fails on parent code")
 	}
 	if r.IsCatching {
 		t.Error("IsCatching should be false")
@@ -50,8 +50,9 @@ func TestChain_FailsOnOriginal(t *testing.T) {
 func TestChain_Catching(t *testing.T) {
 	results := []model.TestResult{
 		{
-			PassOriginal: true,
-			FailMutant:   true,
+			PassParent: true,
+			FailDiff:   true,
+			DiffOutput: "--- FAIL: TestFoo\n    got 5, expected 10\n",
 			Mutant: model.Mutant{
 				Original: "x > 0",
 				Mutated:  "x >= 0",
@@ -59,7 +60,7 @@ func TestChain_Catching(t *testing.T) {
 		},
 	}
 
-	chain := DefaultChain()
+	chain := DefaultRuleOnlyChain()
 	evaluated := chain.Evaluate(results)
 
 	r := evaluated[0]
@@ -69,57 +70,101 @@ func TestChain_Catching(t *testing.T) {
 	if r.FilteredReason != "" {
 		t.Errorf("FilteredReason = %q, want empty", r.FilteredReason)
 	}
-	if r.Confidence != 1.0 {
-		t.Errorf("Confidence = %f, want 1.0", r.Confidence)
+	// Assessment should be positive (weak catch starting at 0.5, boosted by true positive patterns)
+	if r.Assessment <= 0 {
+		t.Errorf("Assessment = %f, want > 0", r.Assessment)
 	}
 }
 
-func TestChain_TrivialMutant(t *testing.T) {
+func TestChain_NoCatch(t *testing.T) {
 	results := []model.TestResult{
 		{
-			PassOriginal: true,
-			FailMutant:   true,
-			Mutant: model.Mutant{
-				Original: "x",  // len < 3
-				Mutated:  "y",  // len < 3
-			},
+			PassParent: true,
+			FailDiff:   false,
 		},
 	}
 
-	chain := DefaultChain()
+	chain := DefaultRuleOnlyChain()
+	evaluated := chain.Evaluate(results)
+
+	r := evaluated[0]
+	if r.IsCatching {
+		t.Error("IsCatching should be false when test passes on both parent and new code")
+	}
+	if r.Assessment != 0 {
+		t.Errorf("Assessment = %f, want 0 for no catch", r.Assessment)
+	}
+}
+
+func TestFalsePositivePatterns_Reflection(t *testing.T) {
+	results := []model.TestResult{
+		{
+			PassParent: true,
+			FailDiff:   true,
+			DiffOutput: "FAIL",
+			Test: model.GeneratedTest{
+				TestCode: `package foo
+import "reflect"
+func TestFoo(t *testing.T) { reflect.DeepEqual(a, b) }`,
+			},
+			Mutant: model.Mutant{Original: "x > 0", Mutated: "x >= 0"},
+		},
+	}
+
+	chain := DefaultRuleOnlyChain()
 	evaluated := chain.Evaluate(results)
 
 	r := evaluated[0]
 	if !r.IsCatching {
 		t.Error("IsCatching should be true")
 	}
-	if r.Confidence >= 1.0 {
-		t.Errorf("Confidence = %f, should be reduced for trivial mutant", r.Confidence)
+	// Assessment should be reduced due to reflection usage
+	if r.Assessment >= 0.5 {
+		t.Errorf("Assessment = %f, should be reduced for reflection usage", r.Assessment)
 	}
 }
 
-func TestChain_ClearAssertionBoost(t *testing.T) {
+func TestTruePositivePatterns_BoolChange(t *testing.T) {
 	results := []model.TestResult{
 		{
-			PassOriginal: true,
-			FailMutant:   true,
-			MutantOutput: "--- FAIL: TestFoo\n    got 5, expected 10\n",
-			Mutant: model.Mutant{
-				Original: "x > 10",
-				Mutated:  "x > 20",
-			},
+			PassParent: true,
+			FailDiff:   true,
+			DiffOutput: "--- FAIL: TestFoo\n    got: true, want: false\n",
+			Mutant:     model.Mutant{Original: "x > 0", Mutated: "x >= 0"},
 		},
 	}
 
-	chain := DefaultChain()
+	chain := DefaultRuleOnlyChain()
 	evaluated := chain.Evaluate(results)
 
 	r := evaluated[0]
 	if !r.IsCatching {
 		t.Error("IsCatching should be true")
 	}
-	// Confidence should be boosted but capped at 1.0
-	if r.Confidence > 1.0 {
-		t.Errorf("Confidence = %f, should be capped at 1.0", r.Confidence)
+	// Assessment should be boosted for bool change
+	if r.Assessment <= 0.5 {
+		t.Errorf("Assessment = %f, should be boosted for boolean change", r.Assessment)
+	}
+}
+
+func TestFalsePositivePatterns_UndefinedVariable(t *testing.T) {
+	results := []model.TestResult{
+		{
+			PassParent: true,
+			FailDiff:   true,
+			DiffOutput: "undefined: someVar\n",
+			Mutant:     model.Mutant{Original: "x > 0", Mutated: "x >= 0"},
+		},
+	}
+
+	chain := DefaultRuleOnlyChain()
+	evaluated := chain.Evaluate(results)
+
+	r := evaluated[0]
+	if r.IsCatching {
+		t.Error("IsCatching should be false for undefined variable (false positive)")
+	}
+	if r.FilteredReason != "undefined variable (likely rename)" {
+		t.Errorf("FilteredReason = %q, want %q", r.FilteredReason, "undefined variable (likely rename)")
 	}
 }

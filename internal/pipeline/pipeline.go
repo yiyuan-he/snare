@@ -30,7 +30,7 @@ type Options struct {
 	Bedrock  bool
 }
 
-// Pipeline orchestrates the 5-stage JiT test generation process.
+// Pipeline orchestrates the 5-stage JiT catching test process.
 type Pipeline struct {
 	opts Options
 }
@@ -57,9 +57,9 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		return nil, fmt.Errorf("finding module root: %w", err)
 	}
 
-	// Stage 1: Diff Extraction
+	// Stage 1: Diff Extraction (with parent source retrieval)
 	if p.opts.Verbose {
-		fmt.Println("Stage 1: Extracting diffs...")
+		fmt.Println("Stage 1: Extracting diffs and parent sources...")
 	}
 	extractor := diff.NewExtractor(moduleDir)
 	fileDiffs, err := extractor.Extract(p.opts.Staged, p.opts.Commit)
@@ -75,13 +75,17 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 
 	if p.opts.Verbose {
 		for _, fd := range fileDiffs {
-			fmt.Printf("  %s (%d hunks)\n", fd.NewName, len(fd.Hunks))
+			hasParent := "no parent"
+			if len(fd.ParentSource) > 0 {
+				hasParent = "with parent"
+			}
+			fmt.Printf("  %s (%d hunks, %s)\n", fd.NewName, len(fd.Hunks), hasParent)
 		}
 	}
 
-	// Stage 2: AST Analysis
+	// Stage 2: AST Analysis (dual-version: parent + new)
 	if p.opts.Verbose {
-		fmt.Println("Stage 2: Analyzing changed functions...")
+		fmt.Println("Stage 2: Analyzing changed functions (parent + new)...")
 	}
 	changedFuncs, err := analysis.MapChangedFuncs(fileDiffs)
 	if err != nil {
@@ -96,19 +100,25 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 
 	if p.opts.Verbose {
 		for _, fn := range changedFuncs {
-			fmt.Printf("  %s.%s (lines %d-%d)\n", fn.Package, fn.Name, fn.StartLine, fn.EndLine)
+			hasParent := "new function"
+			if fn.ParentBody != "" {
+				hasParent = "modified"
+			}
+			fmt.Printf("  %s.%s (lines %d-%d, %s)\n", fn.Package, fn.Name, fn.StartLine, fn.EndLine, hasParent)
 		}
 	}
 
-	// Stage 3: LLM Generation
+	// Stage 3: Intent-Aware Generation
 	if p.opts.Verbose {
-		fmt.Println("Stage 3: Generating mutants and tests via Claude...")
+		fmt.Println("Stage 3: Generating intent-aware catching tests via Claude...")
 	}
 	goLang := lang.NewGo()
 	gen := testgen.NewGenerator(ctx, p.opts.Model, goLang, p.opts.MaxTests, p.opts.Verbose, p.opts.Bedrock)
 
 	type genResult struct {
 		fn      model.ChangedFunc
+		intent  string
+		risks   []model.Risk
 		mutants []model.Mutant
 		tests   []model.GeneratedTest
 	}
@@ -118,17 +128,19 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		if p.opts.Verbose {
 			fmt.Printf("  Generating for %s...\n", fn.Name)
 		}
-		mutants, tests, err := gen.Generate(ctx, fn)
+		intent, risks, mutants, tests, err := gen.Generate(ctx, fn)
 		if err != nil {
 			fmt.Printf("  Warning: generation failed for %s: %v\n", fn.Name, err)
 			continue
 		}
 		result.MutantsGenerated += len(mutants)
 		result.TestsGenerated += len(tests)
-		generated = append(generated, genResult{fn: fn, mutants: mutants, tests: tests})
+		result.RisksIdentified += len(risks)
+		generated = append(generated, genResult{fn: fn, intent: intent, risks: risks, mutants: mutants, tests: tests})
 
 		if p.opts.Verbose {
-			fmt.Printf("  Generated %d mutants, %d tests for %s\n", len(mutants), len(tests), fn.Name)
+			fmt.Printf("  Intent: %s\n", intent)
+			fmt.Printf("  Generated %d risks, %d mutants, %d tests for %s\n", len(risks), len(mutants), len(tests), fn.Name)
 		}
 	}
 
@@ -138,7 +150,27 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		return result, nil
 	}
 
-	// Stage 4: Test Execution (skip if dry-run)
+	// Aggregate intent for reporting
+	var intents []string
+	for _, g := range generated {
+		if g.intent != "" {
+			intents = append(intents, g.intent)
+		}
+	}
+	if len(intents) > 0 {
+		result.Intent = intents[0]
+		if len(intents) > 1 {
+			result.Intent = intents[0] // Use first; report shows per-function detail anyway
+		}
+	}
+
+	// Build file diff lookup for parent source
+	fileDiffMap := make(map[string]model.FileDiff)
+	for _, fd := range fileDiffs {
+		fileDiffMap[fd.NewName] = fd
+	}
+
+	// Stage 4: Catching Execution (skip if dry-run)
 	if p.opts.DryRun {
 		if p.opts.Verbose {
 			fmt.Println("Stage 4: Skipped (dry-run mode)")
@@ -161,15 +193,22 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 	}
 
 	if p.opts.Verbose {
-		fmt.Println("Stage 4: Executing tests...")
+		fmt.Println("Stage 4: Executing catching tests (parent vs new)...")
 	}
 	executor := runner.NewExecutor(moduleDir, goLang, p.opts.Timeout, p.opts.Verbose)
 
 	for _, g := range generated {
-		// Read the original source file
-		originalSource, err := os.ReadFile(g.fn.FilePath)
+		// Read the new source file from disk
+		newSource, err := os.ReadFile(g.fn.FilePath)
 		if err != nil {
 			fmt.Printf("  Warning: cannot read %s: %v\n", g.fn.FilePath, err)
+			continue
+		}
+
+		// Get parent source from the file diff
+		fd, ok := fileDiffMap[g.fn.FilePath]
+		if !ok || len(fd.ParentSource) == 0 {
+			fmt.Printf("  Warning: no parent source for %s, skipping catching execution\n", g.fn.FilePath)
 			continue
 		}
 
@@ -186,7 +225,7 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 			}
 
 			result.TestsRun++
-			tr, err := executor.ExecuteWithFile(t, mutant, g.fn.FilePath, originalSource)
+			tr, err := executor.ExecuteCatching(t, mutant, g.fn.FilePath, fd.ParentSource, newSource)
 			if err != nil {
 				fmt.Printf("  Warning: execution failed for %s: %v\n", t.TestName, err)
 				tr.FilteredReason = fmt.Sprintf("execution error: %v", err)
@@ -195,17 +234,20 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		}
 	}
 
-	// Stage 5: Assessment
+	// Stage 5: Assessment (rule-based patterns + LLM-as-judge on weak catches)
 	if p.opts.Verbose {
-		fmt.Println("Stage 5: Assessing results...")
+		fmt.Println("Stage 5: Assessing results (rule-based + LLM judge)...")
 	}
-	chain := assess.DefaultChain()
+	chain := assess.DefaultCatchingChain(gen.Client(), p.opts.Model, ctx, p.opts.Verbose)
 	result.Results = chain.Evaluate(result.Results)
 
-	// Count catching and filtered
+	// Count weak/strong catches and filtered
 	for _, r := range result.Results {
 		if r.IsCatching {
-			result.CatchingTests++
+			result.WeakCatches++
+			if r.Assessment > 0.5 {
+				result.StrongCatches++
+			}
 		}
 		if r.FilteredReason != "" {
 			result.FilteredTests++

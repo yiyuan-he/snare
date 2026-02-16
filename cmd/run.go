@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,8 +14,8 @@ import (
 
 var runCmd = &cobra.Command{
 	Use:   "run",
-	Short: "Run JiT tests on current changes",
-	Long:  `Analyzes git diffs, generates mutation-based tests using Claude, and identifies catching tests.`,
+	Short: "Run JiT catching tests on current changes",
+	Long:  `Analyzes git diffs, infers intent, identifies risks, generates catching tests, and assesses behavioral changes.`,
 	RunE:  runJiT,
 }
 
@@ -72,71 +73,60 @@ func runJiT(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// aggregateByMutant groups test results by FuncName:MutantID composite key.
-func aggregateByMutant(results []model.TestResult) []model.MutantSummary {
+// aggregateByCatch groups test results into CatchSummary entries by FuncName:MutantID.
+func aggregateByCatch(results []model.TestResult) []model.CatchSummary {
 	type key struct{ funcName, mutantID string }
 	order := []key{}
-	groups := map[key]*model.MutantSummary{}
+	groups := map[key]*model.CatchSummary{}
 
 	for _, r := range results {
 		k := key{r.Mutant.FuncName, r.Mutant.ID}
 		s, ok := groups[k]
 		if !ok {
-			s = &model.MutantSummary{Mutant: r.Mutant}
+			s = &model.CatchSummary{
+				Mutant: r.Mutant,
+				Risk:   model.Risk{ID: r.Mutant.RiskID, Description: r.Mutant.Description},
+			}
 			groups[k] = s
 			order = append(order, k)
 		}
 		s.Tests = append(s.Tests, r)
 		if r.IsCatching {
-			s.IsCaught = true
+			s.IsWeakCatch = true
 		}
-		if r.Confidence > s.BestConfidence {
-			s.BestConfidence = r.Confidence
+		if r.Assessment > s.Assessment {
+			s.Assessment = r.Assessment
+		}
+		if r.BehaviorChange != "" {
+			s.BehaviorChange = r.BehaviorChange
 		}
 	}
 
-	out := make([]model.MutantSummary, 0, len(order))
+	out := make([]model.CatchSummary, 0, len(order))
 	for _, k := range order {
 		out = append(out, *groups[k])
 	}
 	return out
 }
 
-// partitionMutants splits summaries into uncaught and caught slices.
-func partitionMutants(summaries []model.MutantSummary) (uncaught, caught []model.MutantSummary) {
-	for _, s := range summaries {
-		if s.IsCaught {
-			caught = append(caught, s)
-		} else {
-			uncaught = append(uncaught, s)
-		}
-	}
-	return
-}
-
 func printReport(result *model.PipelineResult, opts pipeline.Options) {
-	summaries := aggregateByMutant(result.Results)
+	summaries := aggregateByCatch(result.Results)
 
 	fmt.Println()
 	fmt.Println("═══════════════════════════════════════════════")
-	fmt.Println("  snare — Mutation Testing Report")
+	fmt.Println("  snare — JIT Catching Report")
 	fmt.Println("═══════════════════════════════════════════════")
 	fmt.Println()
 
 	if !opts.DryRun {
-		uncaught, caught := partitionMutants(summaries)
-		total := len(uncaught) + len(caught)
-		pct := 0
-		if total > 0 {
-			pct = len(caught) * 100 / total
-		}
-		fmt.Printf("  Mutation coverage:  %d/%d caught (%d%%)\n", len(caught), total, pct)
+		fmt.Printf("  Weak catches:     %d found\n", result.WeakCatches)
+		fmt.Printf("  Likely bugs:      %d (assessment > 0.5)\n", result.StrongCatches)
 		fmt.Println("  ──────────────────────────────────")
 	}
 
 	fmt.Printf("  Files analyzed:     %d\n", result.FilesAnalyzed)
 	fmt.Printf("  Functions analyzed: %d\n", result.FuncsAnalyzed)
-	fmt.Printf("  Mutants generated:  %d\n", result.MutantsGenerated)
+	fmt.Printf("  Risks identified:   %d\n", result.RisksIdentified)
 	fmt.Printf("  Tests generated:    %d\n", result.TestsGenerated)
 
 	if !opts.DryRun {
@@ -151,18 +141,36 @@ func printReport(result *model.PipelineResult, opts pipeline.Options) {
 		return
 	}
 
-	uncaught, caught := partitionMutants(summaries)
-	printUncaughtSection(uncaught, opts)
-	printCaughtSection(caught, opts)
+	// Partition summaries into likely bugs, weak catches, no catch
+	var likelyBugs, weakCatches, noCatch []model.CatchSummary
+	for _, s := range summaries {
+		if s.IsWeakCatch && s.Assessment > 0.5 {
+			likelyBugs = append(likelyBugs, s)
+		} else if s.IsWeakCatch {
+			weakCatches = append(weakCatches, s)
+		} else {
+			noCatch = append(noCatch, s)
+		}
+	}
+
+	// Sort likely bugs by assessment (highest first)
+	sort.Slice(likelyBugs, func(i, j int) bool {
+		return likelyBugs[i].Assessment > likelyBugs[j].Assessment
+	})
+
+	printLikelyBugsSection(likelyBugs, opts)
+	printWeakCatchesSection(weakCatches, opts)
+	printNoCatchSection(noCatch)
 	printFilteredSection(result.Results)
 }
 
-func printDryRunReport(summaries []model.MutantSummary, opts pipeline.Options) {
+func printDryRunReport(summaries []model.CatchSummary, opts pipeline.Options) {
 	fmt.Println("  [dry-run] Tests were generated but not executed.")
 	fmt.Println()
 
 	for i, s := range summaries {
 		fmt.Printf("  %d. [%s] %s\n", i+1, s.Mutant.FuncName, s.Mutant.Description)
+		fmt.Printf("     Risk: %s\n", s.Risk.Description)
 		fmt.Printf("     - original:  %s\n", strings.TrimSpace(s.Mutant.Original))
 		fmt.Printf("     + mutated:   %s\n", strings.TrimSpace(s.Mutant.Mutated))
 
@@ -181,64 +189,81 @@ func printDryRunReport(summaries []model.MutantSummary, opts pipeline.Options) {
 	}
 }
 
-func printUncaughtSection(uncaught []model.MutantSummary, opts pipeline.Options) {
-	fmt.Printf("── UNCAUGHT MUTATIONS (%d) ─────────────────────\n", len(uncaught))
+func printLikelyBugsSection(likelyBugs []model.CatchSummary, opts pipeline.Options) {
+	fmt.Printf("── LIKELY BUGS (%d) ────────────────────────────\n", len(likelyBugs))
 	fmt.Println()
 
-	if len(uncaught) == 0 {
-		fmt.Println("  All mutations were caught!")
+	if len(likelyBugs) == 0 {
+		fmt.Println("  No likely bugs detected.")
 		fmt.Println()
 		return
 	}
 
-	fmt.Println("  These mutations could be introduced without any test catching them.")
+	fmt.Println("  These behavioral changes appear unintentional and may indicate bugs.")
 	fmt.Println()
 
-	for i, s := range uncaught {
-		fmt.Printf("  %d. [%s] %s\n", i+1, s.Mutant.FuncName, s.Mutant.Description)
-		fmt.Printf("     - original:  %s\n", strings.TrimSpace(s.Mutant.Original))
-		fmt.Printf("     + mutated:   %s\n", strings.TrimSpace(s.Mutant.Mutated))
-
-		if opts.Verbose && len(s.Tests) > 0 {
-			fmt.Printf("     Attempted tests (%d):\n", len(s.Tests))
-			for _, t := range s.Tests {
-				reason := "did not catch mutant"
-				if t.FilteredReason != "" {
-					reason = t.FilteredReason
-				} else if !t.PassOriginal {
-					reason = "fails on original code"
-				}
-				fmt.Printf("       - %s: %s\n", t.Test.TestName, reason)
-			}
+	for i, s := range likelyBugs {
+		fmt.Printf("  %d. [%s] %s (assessment: %.2f)\n", i+1, s.Mutant.FuncName, s.Mutant.Description, s.Assessment)
+		fmt.Printf("     Risk: %s\n", s.Risk.Description)
+		if s.BehaviorChange != "" {
+			fmt.Printf("     Change: %s\n", s.BehaviorChange)
 		}
-		fmt.Println()
-	}
-}
-
-func printCaughtSection(caught []model.MutantSummary, opts pipeline.Options) {
-	fmt.Printf("── CAUGHT MUTATIONS (%d) ───────────────────────\n", len(caught))
-	fmt.Println()
-
-	if len(caught) == 0 {
-		fmt.Println("  No mutations were caught.")
-		fmt.Println()
-		return
-	}
-
-	for i, s := range caught {
-		fmt.Printf("  %d. [%s] %s (%.0f%% confidence)\n", i+1, s.Mutant.FuncName, s.Mutant.Description, s.BestConfidence*100)
 
 		if opts.Verbose {
 			for _, t := range s.Tests {
 				if t.IsCatching {
-					fmt.Printf("     ✓ %s (%.0f%%)\n", t.Test.TestName, t.Confidence*100)
+					fmt.Printf("     Test: %s (assessment: %.2f)\n", t.Test.TestName, t.Assessment)
 					fmt.Println()
 					fmt.Println(t.Test.TestCode)
 					fmt.Println()
 				}
 			}
 		}
+		fmt.Println()
 	}
+}
+
+func printWeakCatchesSection(weakCatches []model.CatchSummary, opts pipeline.Options) {
+	fmt.Printf("── WEAK CATCHES (%d) ───────────────────────────\n", len(weakCatches))
+	fmt.Println()
+
+	if len(weakCatches) == 0 {
+		fmt.Println("  No weak catches.")
+		fmt.Println()
+		return
+	}
+
+	fmt.Println("  These behavioral changes were detected but may be intentional.")
+	fmt.Println()
+
+	for i, s := range weakCatches {
+		fmt.Printf("  %d. [%s] %s (assessment: %.2f)\n", i+1, s.Mutant.FuncName, s.Mutant.Description, s.Assessment)
+		if s.BehaviorChange != "" {
+			fmt.Printf("     Change: %s\n", s.BehaviorChange)
+		}
+
+		if opts.Verbose {
+			for _, t := range s.Tests {
+				if t.IsCatching {
+					fmt.Printf("     Test: %s\n", t.Test.TestName)
+				}
+			}
+		}
+		fmt.Println()
+	}
+}
+
+func printNoCatchSection(noCatch []model.CatchSummary) {
+	fmt.Printf("── NO CATCH (%d) ───────────────────────────────\n", len(noCatch))
+	fmt.Println()
+
+	if len(noCatch) == 0 {
+		fmt.Println("  All risks had behavioral changes detected.")
+		fmt.Println()
+		return
+	}
+
+	fmt.Println("  Tests for these risks passed on both old and new code (no behavioral change).")
 	fmt.Println()
 }
 
@@ -254,7 +279,7 @@ func printFilteredSection(results []model.TestResult) {
 		return
 	}
 
-	fmt.Printf("── Filtered Tests (%d) ─────────────────────────\n", len(filtered))
+	fmt.Printf("── FILTERED (%d) ───────────────────────────────\n", len(filtered))
 	for _, r := range filtered {
 		fmt.Printf("  %s: %s\n", r.Test.TestName, r.FilteredReason)
 	}

@@ -1,8 +1,13 @@
 package assess
 
-import "github.com/yiyuanh/snare/pkg/model"
+import (
+	"context"
 
-// Assessor evaluates test results and adjusts confidence or filters them.
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/yiyuanh/snare/pkg/model"
+)
+
+// Assessor evaluates test results and adjusts assessment or filters them.
 type Assessor interface {
 	Assess(result *model.TestResult)
 }
@@ -17,13 +22,31 @@ func NewChain(assessors ...Assessor) *Chain {
 	return &Chain{assessors: assessors}
 }
 
-// DefaultChain returns the standard assessment chain.
-func DefaultChain() *Chain {
+// DefaultCatchingChain returns the assessment chain for the catching workflow.
+// It includes rule-based pattern matching and optionally an LLM judge.
+func DefaultCatchingChain(client *anthropic.Client, modelID string, ctx context.Context, verbose bool) *Chain {
+	assessors := []Assessor{
+		&CompilationFilter{},
+		&CatchingAssessor{},
+		&FalsePositivePatterns{},
+		&TruePositivePatterns{},
+	}
+
+	if client != nil {
+		assessors = append(assessors, NewLLMJudge(client, modelID, ctx, verbose))
+	}
+
+	return NewChain(assessors...)
+}
+
+// DefaultRuleOnlyChain returns an assessment chain with only rule-based assessors.
+// Useful for dry-run mode or when no LLM client is available.
+func DefaultRuleOnlyChain() *Chain {
 	return NewChain(
 		&CompilationFilter{},
 		&CatchingAssessor{},
-		&TrivialMutantFilter{},
-		&ErrorMessageFilter{},
+		&FalsePositivePatterns{},
+		&TruePositivePatterns{},
 	)
 }
 
@@ -35,6 +58,7 @@ func (c *Chain) Evaluate(results []model.TestResult) []model.TestResult {
 			continue
 		}
 		results[i].Confidence = 1.0
+		results[i].Assessment = 0
 		for _, a := range c.assessors {
 			a.Assess(&results[i])
 		}

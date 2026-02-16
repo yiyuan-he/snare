@@ -10,6 +10,7 @@ import (
 )
 
 // MapChangedFuncs takes file diffs and identifies which functions were changed.
+// It analyzes both the new code and parent code to populate dual-version info.
 func MapChangedFuncs(diffs []model.FileDiff) ([]model.ChangedFunc, error) {
 	var result []model.ChangedFunc
 
@@ -35,6 +36,22 @@ func analyzeFile(fd model.FileDiff) ([]model.ChangedFunc, error) {
 		return nil, fmt.Errorf("parsing AST: %w", err)
 	}
 
+	// Parse parent source if available
+	var parentFuncs []FuncInfo
+	if len(fd.ParentSource) > 0 {
+		parentFset := token.NewFileSet()
+		_, _, _, pf, err := ParseFunctions(parentFset, fd.ParentSource)
+		if err == nil {
+			parentFuncs = pf
+		}
+	}
+
+	// Build lookup for parent functions by name
+	parentFuncMap := make(map[string]FuncInfo)
+	for _, pf := range parentFuncs {
+		parentFuncMap[pf.Name] = pf
+	}
+
 	var result []model.ChangedFunc
 
 	for _, fn := range funcs {
@@ -43,12 +60,18 @@ func analyzeFile(fd model.FileDiff) ([]model.ChangedFunc, error) {
 			continue
 		}
 
+		// Skip newly added functions (no parent version) — no regression possible
+		parentFunc, hasParent := parentFuncMap[fn.Name]
+		if !hasParent && len(fd.ParentSource) > 0 {
+			continue
+		}
+
 		var diffParts []string
 		for _, h := range overlapping {
 			diffParts = append(diffParts, h.Content)
 		}
 
-		result = append(result, model.ChangedFunc{
+		cf := model.ChangedFunc{
 			FilePath:    fd.NewName,
 			Package:     pkg,
 			Name:        fn.Name,
@@ -59,7 +82,15 @@ func analyzeFile(fd model.FileDiff) ([]model.ChangedFunc, error) {
 			Imports:     imports,
 			TypeDefs:    typeDefs,
 			DiffContext: strings.Join(diffParts, "\n"),
-		})
+		}
+
+		// Populate parent info if available
+		if hasParent {
+			cf.ParentSignature = parentFunc.Signature
+			cf.ParentBody = parentFunc.Body
+		}
+
+		result = append(result, cf)
 	}
 	return result, nil
 }
