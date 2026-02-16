@@ -97,6 +97,23 @@ func (e *Extractor) getParentSource(filePath string, staged bool, commit string)
 	return out, nil
 }
 
+// GetCommitMessage returns the commit message for context.
+// For a specific commit, it returns that commit's message.
+// For staged/unstaged changes, it returns the most recent commit message (HEAD).
+func (e *Extractor) GetCommitMessage(commit string) (string, error) {
+	ref := "HEAD"
+	if commit != "" {
+		ref = commit
+	}
+	cmd := exec.Command("git", "log", "-1", "--format=%B", ref)
+	cmd.Dir = e.Dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git log: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func (e *Extractor) parse(raw string) ([]model.FileDiff, error) {
 	files, _, err := gitdiff.Parse(strings.NewReader(raw))
 	if err != nil {

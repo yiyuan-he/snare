@@ -42,12 +42,46 @@ func TestFoo_BoundaryCheck(t *testing.T) {
 		{"assessment instruction", "unexpected bug"},
 		{"json format", `"assessment"`},
 		{"behavior change field", `"behavior_change"`},
+		{"question field", `"question"`},
 	}
 
 	for _, c := range checks {
 		if !strings.Contains(prompt, c.substr) {
 			t.Errorf("judge prompt missing %s: expected to contain %q", c.name, c.substr)
 		}
+	}
+}
+
+func TestBuildJudgePrompt_WithCommitMessage(t *testing.T) {
+	result := &model.TestResult{
+		Test:         model.GeneratedTest{TestCode: "package foo"},
+		Mutant:       model.Mutant{Description: "test risk"},
+		ParentOutput: "ok",
+		DiffOutput:   "FAIL",
+	}
+
+	prompt := BuildJudgePrompt(result, "refactor: use map for deduplication")
+
+	if !strings.Contains(prompt, "Commit Context") {
+		t.Error("judge prompt should contain commit context section")
+	}
+	if !strings.Contains(prompt, "refactor: use map for deduplication") {
+		t.Error("judge prompt should contain the commit message")
+	}
+}
+
+func TestBuildJudgePrompt_WithoutCommitMessage(t *testing.T) {
+	result := &model.TestResult{
+		Test:         model.GeneratedTest{TestCode: "package foo"},
+		Mutant:       model.Mutant{Description: "test risk"},
+		ParentOutput: "ok",
+		DiffOutput:   "FAIL",
+	}
+
+	prompt := BuildJudgePrompt(result)
+
+	if strings.Contains(prompt, "Commit Context") {
+		t.Error("judge prompt should not contain commit context section when no message provided")
 	}
 }
 

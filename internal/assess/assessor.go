@@ -24,7 +24,7 @@ func NewChain(assessors ...Assessor) *Chain {
 
 // DefaultCatchingChain returns the assessment chain for the catching workflow.
 // It includes rule-based pattern matching and optionally an LLM judge.
-func DefaultCatchingChain(client *anthropic.Client, modelID string, ctx context.Context, verbose bool) *Chain {
+func DefaultCatchingChain(client *anthropic.Client, modelID string, ctx context.Context, verbose bool, commitMessage string) *Chain {
 	assessors := []Assessor{
 		&CompilationFilter{},
 		&CatchingAssessor{},
@@ -33,7 +33,7 @@ func DefaultCatchingChain(client *anthropic.Client, modelID string, ctx context.
 	}
 
 	if client != nil {
-		assessors = append(assessors, NewLLMJudge(client, modelID, ctx, verbose))
+		assessors = append(assessors, NewLLMJudge(client, modelID, ctx, verbose, commitMessage))
 	}
 
 	return NewChain(assessors...)

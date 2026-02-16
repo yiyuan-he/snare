@@ -12,25 +12,28 @@ import (
 
 // LLMJudge uses Claude to assess whether a weak catch is a true or false positive.
 type LLMJudge struct {
-	client  *anthropic.Client
-	model   string
-	ctx     context.Context
-	verbose bool
+	client        *anthropic.Client
+	model         string
+	ctx           context.Context
+	verbose       bool
+	commitMessage string
 }
 
 // NewLLMJudge creates a new LLM-based assessor.
-func NewLLMJudge(client *anthropic.Client, modelID string, ctx context.Context, verbose bool) *LLMJudge {
+func NewLLMJudge(client *anthropic.Client, modelID string, ctx context.Context, verbose bool, commitMessage string) *LLMJudge {
 	return &LLMJudge{
-		client:  client,
-		model:   modelID,
-		ctx:     ctx,
-		verbose: verbose,
+		client:        client,
+		model:         modelID,
+		ctx:           ctx,
+		verbose:       verbose,
+		commitMessage: commitMessage,
 	}
 }
 
 type judgeResponse struct {
 	Assessment     float64 `json:"assessment"`
 	BehaviorChange string  `json:"behavior_change"`
+	Question       string  `json:"question"`
 }
 
 func (j *LLMJudge) Assess(result *model.TestResult) {
@@ -39,7 +42,7 @@ func (j *LLMJudge) Assess(result *model.TestResult) {
 		return
 	}
 
-	prompt := buildJudgePrompt(result)
+	prompt := buildJudgePrompt(result, j.commitMessage)
 
 	resp, err := j.client.Messages.New(j.ctx, anthropic.MessageNewParams{
 		Model:     anthropic.Model(j.model),
@@ -98,6 +101,7 @@ func (j *LLMJudge) Assess(result *model.TestResult) {
 
 	result.Assessment = combined
 	result.BehaviorChange = jr.BehaviorChange
+	result.Question = jr.Question
 
 	if j.verbose {
 		fmt.Printf("  [judge] %s: rule=%.2f llm=%.2f combined=%.2f\n",
@@ -106,11 +110,15 @@ func (j *LLMJudge) Assess(result *model.TestResult) {
 }
 
 // BuildJudgePrompt constructs the prompt for the LLM judge. Exported for testing.
-func BuildJudgePrompt(result *model.TestResult) string {
-	return buildJudgePrompt(result)
+func BuildJudgePrompt(result *model.TestResult, commitMessage ...string) string {
+	cm := ""
+	if len(commitMessage) > 0 {
+		cm = commitMessage[0]
+	}
+	return buildJudgePrompt(result, cm)
 }
 
-func buildJudgePrompt(result *model.TestResult) string {
+func buildJudgePrompt(result *model.TestResult, commitMessage string) string {
 	var sb strings.Builder
 
 	sb.WriteString(`You are a code review expert assessing whether a test failure indicates a real bug or an expected behavior change.
@@ -139,6 +147,12 @@ func buildJudgePrompt(result *model.TestResult) string {
 	sb.WriteString(result.Mutant.Description)
 	sb.WriteString("\n\n")
 
+	if commitMessage != "" {
+		sb.WriteString("## Commit Context\n")
+		sb.WriteString(commitMessage)
+		sb.WriteString("\n\n")
+	}
+
 	sb.WriteString(`## Task
 
 Analyze whether this test failure represents:
@@ -149,13 +163,15 @@ Analyze whether this test failure represents:
 Respond with ONLY a JSON object:
 {
   "assessment": <float from -1.0 to 1.0>,
-  "behavior_change": "<one-sentence description of what behavioral change was detected>"
+  "behavior_change": "<one-sentence description of what behavioral change was detected>",
+  "question": "<one-sentence question for the developer phrased as 'Is it expected that...' describing the specific behavioral change in concrete terms (values, types, states)>"
 }
 
 Guidelines:
 - Score closer to 1.0: the failure clearly indicates an unintended bug
 - Score closer to -1.0: the failure is an expected consequence of the intended change
 - Score near 0: ambiguous, could go either way
+- The "question" should help the developer quickly decide if the change is intentional
 `)
 
 	return sb.String()

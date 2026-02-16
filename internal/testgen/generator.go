@@ -59,8 +59,8 @@ func (g *Generator) Client() *anthropic.Client {
 
 // Generate produces intent, risks, mutants and tests for a changed function.
 // It makes a single API call per function and includes one retry on parse failure.
-func (g *Generator) Generate(ctx context.Context, fn model.ChangedFunc) (string, []model.Risk, []model.Mutant, []model.GeneratedTest, error) {
-	prompt := BuildCatchingPrompt(fn)
+func (g *Generator) Generate(ctx context.Context, fn model.ChangedFunc, commitMessage ...string) (string, []model.Risk, []model.Mutant, []model.GeneratedTest, error) {
+	prompt := BuildCatchingPrompt(fn, commitMessage...)
 
 	intent, risks, mutants, tests, err := g.callAndParse(ctx, prompt, fn)
 	if err != nil {

@@ -70,17 +70,18 @@ type CatchingLLMResponse struct {
 
 // TestResult represents the outcome of running a generated test.
 type TestResult struct {
-	Test           GeneratedTest
-	Mutant         Mutant
-	PassParent     bool    // test passes on old/parent code
-	FailDiff       bool    // test fails on new/diff code
-	IsCatching     bool    // PassParent && FailDiff
-	ParentOutput   string  // output from running on parent code
-	DiffOutput     string  // output from running on new/diff code
-	BehaviorChange string  // human-readable description of what changed
-	Assessment     float64 // true/false positive score (-1 to 1)
-	Confidence     float64 // kept for backward compat
-	FilteredReason string
+	Test           GeneratedTest `json:"test"`
+	Mutant         Mutant        `json:"mutant"`
+	PassParent     bool          `json:"pass_parent"`
+	FailDiff       bool          `json:"fail_diff"`
+	IsCatching     bool          `json:"is_catching"`
+	ParentOutput   string        `json:"parent_output,omitempty"`
+	DiffOutput     string        `json:"diff_output,omitempty"`
+	BehaviorChange string        `json:"behavior_change,omitempty"`
+	Question       string        `json:"question,omitempty"`
+	Assessment     float64       `json:"assessment"`
+	Confidence     float64       `json:"confidence"`
+	FilteredReason string        `json:"filtered_reason,omitempty"`
 }
 
 // CatchSummary aggregates test results for a single risk/mutant pair.
@@ -91,20 +92,21 @@ type CatchSummary struct {
 	IsWeakCatch    bool
 	Assessment     float64 // aggregated -1 to 1
 	BehaviorChange string
+	Question       string // "Is it expected that..." question for the developer
 }
 
 // PipelineResult holds the overall result of a pipeline run.
 type PipelineResult struct {
-	FilesAnalyzed    int
-	FuncsAnalyzed    int
-	RisksIdentified  int
-	MutantsGenerated int
-	TestsGenerated   int
-	TestsRun         int
-	WeakCatches      int
-	StrongCatches    int
-	FilteredTests    int
-	Results          []TestResult
-	Duration         time.Duration
-	Intent           string // aggregated intent from all functions
+	FilesAnalyzed    int           `json:"files_analyzed"`
+	FuncsAnalyzed    int           `json:"funcs_analyzed"`
+	RisksIdentified  int           `json:"risks_identified"`
+	MutantsGenerated int           `json:"mutants_generated"`
+	TestsGenerated   int           `json:"tests_generated"`
+	TestsRun         int           `json:"tests_run"`
+	WeakCatches      int           `json:"weak_catches"`
+	StrongCatches    int           `json:"strong_catches"`
+	FilteredTests    int           `json:"filtered_tests"`
+	Results          []TestResult  `json:"results"`
+	Duration         time.Duration `json:"duration"`
+	Intent           string        `json:"intent,omitempty"`
 }

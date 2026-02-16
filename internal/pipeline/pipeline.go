@@ -18,16 +18,17 @@ import (
 
 // Options configures the pipeline.
 type Options struct {
-	Dir      string
-	Staged   bool
-	Commit   string
-	Model    string
-	MaxTests int
-	Verbose  bool
-	DryRun   bool
-	Timeout  time.Duration
-	APIKey   string
-	Bedrock  bool
+	Dir           string
+	Staged        bool
+	Commit        string
+	Model         string
+	MaxTests      int
+	Verbose       bool
+	DryRun        bool
+	Timeout       time.Duration
+	APIKey        string
+	Bedrock       bool
+	CommitMessage string // populated during pipeline run
 }
 
 // Pipeline orchestrates the 5-stage JiT catching test process.
@@ -72,6 +73,15 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		return result, nil
 	}
 	result.FilesAnalyzed = len(fileDiffs)
+
+	// Fetch commit message for context
+	commitMsg, err := extractor.GetCommitMessage(p.opts.Commit)
+	if err != nil {
+		if p.opts.Verbose {
+			fmt.Printf("  Warning: could not get commit message: %v\n", err)
+		}
+	}
+	p.opts.CommitMessage = commitMsg
 
 	if p.opts.Verbose {
 		for _, fd := range fileDiffs {
@@ -128,7 +138,7 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		if p.opts.Verbose {
 			fmt.Printf("  Generating for %s...\n", fn.Name)
 		}
-		intent, risks, mutants, tests, err := gen.Generate(ctx, fn)
+		intent, risks, mutants, tests, err := gen.Generate(ctx, fn, p.opts.CommitMessage)
 		if err != nil {
 			fmt.Printf("  Warning: generation failed for %s: %v\n", fn.Name, err)
 			continue
@@ -238,7 +248,7 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 	if p.opts.Verbose {
 		fmt.Println("Stage 5: Assessing results (rule-based + LLM judge)...")
 	}
-	chain := assess.DefaultCatchingChain(gen.Client(), p.opts.Model, ctx, p.opts.Verbose)
+	chain := assess.DefaultCatchingChain(gen.Client(), p.opts.Model, ctx, p.opts.Verbose, p.opts.CommitMessage)
 	result.Results = chain.Evaluate(result.Results)
 
 	// Count weak/strong catches and filtered

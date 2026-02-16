@@ -55,6 +55,45 @@ func TestBuildCatchingPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildCatchingPrompt_WithCommitMessage(t *testing.T) {
+	fn := model.ChangedFunc{
+		FilePath:        "pkg/math/add.go",
+		Package:         "math",
+		Name:            "Add",
+		Signature:       "func Add(a, b int) int",
+		Body:            "{\n\treturn a + b\n}",
+		DiffContext:     "+\treturn a + b",
+		ParentSignature: "func Add(a, b int) int",
+		ParentBody:      "{\n\treturn a - b\n}",
+	}
+
+	prompt := BuildCatchingPrompt(fn, "fix: correct addition logic")
+
+	if !strings.Contains(prompt, "Commit Context") {
+		t.Error("prompt should contain commit context section")
+	}
+	if !strings.Contains(prompt, "fix: correct addition logic") {
+		t.Error("prompt should contain the commit message")
+	}
+}
+
+func TestBuildCatchingPrompt_WithoutCommitMessage(t *testing.T) {
+	fn := model.ChangedFunc{
+		FilePath:    "pkg/math/add.go",
+		Package:     "math",
+		Name:        "Add",
+		Signature:   "func Add(a, b int) int",
+		Body:        "{\n\treturn a + b\n}",
+		DiffContext: "+\treturn a + b",
+	}
+
+	prompt := BuildCatchingPrompt(fn)
+
+	if strings.Contains(prompt, "Commit Context") {
+		t.Error("prompt should not contain commit context section when no message provided")
+	}
+}
+
 func TestBuildCatchingPrompt_NoParent(t *testing.T) {
 	// When no parent is available, prompt should use current code as fallback
 	fn := model.ChangedFunc{

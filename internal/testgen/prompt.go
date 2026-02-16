@@ -8,8 +8,9 @@ import (
 )
 
 // BuildCatchingPrompt constructs the intent-aware catching prompt for Claude.
-// It takes a ChangedFunc with both parent and new code populated.
-func BuildCatchingPrompt(fn model.ChangedFunc) string {
+// It takes a ChangedFunc with both parent and new code populated,
+// and an optional commit message for additional context.
+func BuildCatchingPrompt(fn model.ChangedFunc, commitMessage ...string) string {
 	var sb strings.Builder
 
 	sb.WriteString(`You are a Just-in-Time catching test expert. Your goal is to find bugs introduced by a code change by generating tests that pass on the OLD code but might fail on the NEW code.
@@ -34,6 +35,13 @@ func BuildCatchingPrompt(fn model.ChangedFunc) string {
 			sb.WriteString(td + "\n\n")
 		}
 		sb.WriteString("```\n\n")
+	}
+
+	// Commit context (if provided)
+	if len(commitMessage) > 0 && commitMessage[0] != "" {
+		sb.WriteString("### Commit Context\n")
+		sb.WriteString(commitMessage[0])
+		sb.WriteString("\n\n")
 	}
 
 	// Parent (OLD) function
