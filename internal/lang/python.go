@@ -2,6 +2,7 @@ package lang
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -131,13 +132,11 @@ func (p *Python) ApplyMutant(originalSource []byte, original string, mutated str
 }
 
 func (p *Python) RunTest(dir string, testFile string, testFunc string, timeout time.Duration) (passed bool, output string, err error) {
-	timeoutSec := int(timeout.Seconds())
-	if timeoutSec < 1 {
-		timeoutSec = 1
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 
-	args := []string{"-m", "pytest", "-xvs", fmt.Sprintf("%s::%s", testFile, testFunc), fmt.Sprintf("--timeout=%d", timeoutSec)}
-	cmd := exec.Command("python3", args...)
+	args := []string{"-m", "pytest", "-xvs", fmt.Sprintf("%s::%s", testFile, testFunc)}
+	cmd := exec.CommandContext(ctx, "python3", args...)
 	cmd.Dir = dir
 
 	// Set PYTHONPATH to the temp dir root so imports work
