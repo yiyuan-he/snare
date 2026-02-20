@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/yiyuanh/snare/internal/assess"
 	"github.com/yiyuanh/snare/internal/analysis"
+	"github.com/yiyuanh/snare/internal/assess"
 	"github.com/yiyuanh/snare/internal/diff"
 	"github.com/yiyuanh/snare/internal/lang"
 	"github.com/yiyuanh/snare/internal/runner"
+	"github.com/yiyuanh/snare/internal/telemetry"
 	"github.com/yiyuanh/snare/internal/testgen"
 	"github.com/yiyuanh/snare/pkg/model"
 )
@@ -29,6 +31,7 @@ type Options struct {
 	APIKey        string
 	Bedrock       bool
 	CommitMessage string // populated during pipeline run
+	TelemetryDB   string // path to telemetry SQLite database
 }
 
 // Pipeline orchestrates the 5-stage JiT catching test process.
@@ -52,10 +55,10 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		return nil, fmt.Errorf("resolving directory: %w", err)
 	}
 
-	// Find module root (directory containing go.mod)
-	moduleDir, err := findModuleRoot(dir)
+	// Find project root (directory containing go.mod or setup.py/pyproject.toml)
+	moduleDir, err := findProjectRoot(dir)
 	if err != nil {
-		return nil, fmt.Errorf("finding module root: %w", err)
+		return nil, fmt.Errorf("finding project root: %w", err)
 	}
 
 	// Stage 1: Diff Extraction (with parent source retrieval)
@@ -68,7 +71,7 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		return nil, fmt.Errorf("extracting diffs: %w", err)
 	}
 	if len(fileDiffs) == 0 {
-		fmt.Println("No Go file changes detected.")
+		fmt.Println("No source file changes detected.")
 		result.Duration = time.Since(start)
 		return result, nil
 	}
@@ -93,20 +96,46 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		}
 	}
 
+	// Detect language from file diffs
+	language := detectLanguage(fileDiffs)
+	if p.opts.Verbose {
+		fmt.Printf("  Detected language: %s\n", language.Name())
+	}
+
 	// Stage 2: AST Analysis (dual-version: parent + new)
 	if p.opts.Verbose {
 		fmt.Println("Stage 2: Analyzing changed functions (parent + new)...")
 	}
-	changedFuncs, err := analysis.MapChangedFuncs(fileDiffs)
+
+	var changedFuncs []model.ChangedFunc
+	if language.Name() == "go" {
+		// Use Go-specific AST analysis (backward compatible)
+		changedFuncs, err = analysis.MapChangedFuncs(fileDiffs)
+	} else {
+		// Use language-agnostic analysis via Language interface
+		changedFuncs, err = analysis.MapChangedFuncsWithLang(fileDiffs, language)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("analyzing changes: %w", err)
 	}
 	if len(changedFuncs) == 0 {
-		fmt.Println("No changed functions detected in Go files.")
+		fmt.Printf("No changed functions detected in %s files.\n", language.Name())
 		result.Duration = time.Since(start)
 		return result, nil
 	}
 	result.FuncsAnalyzed = len(changedFuncs)
+
+	// Enrich with telemetry data if available
+	if p.opts.TelemetryDB != "" {
+		if p.opts.Verbose {
+			fmt.Printf("  Loading telemetry from %s...\n", p.opts.TelemetryDB)
+		}
+		if err := p.enrichWithTelemetry(changedFuncs); err != nil {
+			if p.opts.Verbose {
+				fmt.Printf("  Warning: telemetry enrichment failed: %v\n", err)
+			}
+		}
+	}
 
 	if p.opts.Verbose {
 		for _, fn := range changedFuncs {
@@ -114,7 +143,11 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 			if fn.ParentBody != "" {
 				hasParent = "modified"
 			}
-			fmt.Printf("  %s.%s (lines %d-%d, %s)\n", fn.Package, fn.Name, fn.StartLine, fn.EndLine, hasParent)
+			telemetryInfo := ""
+			if fn.TelemetryContext != "" {
+				telemetryInfo = ", with telemetry"
+			}
+			fmt.Printf("  %s.%s (lines %d-%d, %s%s)\n", fn.Package, fn.Name, fn.StartLine, fn.EndLine, hasParent, telemetryInfo)
 		}
 	}
 
@@ -122,8 +155,7 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 	if p.opts.Verbose {
 		fmt.Println("Stage 3: Generating intent-aware catching tests via Claude...")
 	}
-	goLang := lang.NewGo()
-	gen := testgen.NewGenerator(ctx, p.opts.Model, goLang, p.opts.MaxTests, p.opts.Verbose, p.opts.Bedrock)
+	gen := testgen.NewGenerator(ctx, p.opts.Model, language, p.opts.MaxTests, p.opts.Verbose, p.opts.Bedrock)
 
 	type genResult struct {
 		fn      model.ChangedFunc
@@ -169,9 +201,6 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 	}
 	if len(intents) > 0 {
 		result.Intent = intents[0]
-		if len(intents) > 1 {
-			result.Intent = intents[0] // Use first; report shows per-function detail anyway
-		}
 	}
 
 	// Build file diff lookup for parent source
@@ -192,10 +221,14 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 				mutantMap[m.ID] = m
 			}
 			for _, t := range g.tests {
-				result.Results = append(result.Results, model.TestResult{
+				tr := model.TestResult{
 					Test:   t,
 					Mutant: mutantMap[t.MutantID],
-				})
+				}
+				if g.fn.TelemetryContext != "" {
+					tr.TelemetryContext = g.fn.TelemetryContext
+				}
+				result.Results = append(result.Results, tr)
 			}
 		}
 		result.Duration = time.Since(start)
@@ -205,21 +238,27 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 	if p.opts.Verbose {
 		fmt.Println("Stage 4: Executing catching tests (parent vs new)...")
 	}
-	executor := runner.NewExecutor(moduleDir, goLang, p.opts.Timeout, p.opts.Verbose)
+	executor := runner.NewExecutor(moduleDir, language, p.opts.Timeout, p.opts.Verbose)
 
 	for _, g := range generated {
-		// Read the new source file from disk
-		newSource, err := os.ReadFile(g.fn.FilePath)
-		if err != nil {
-			fmt.Printf("  Warning: cannot read %s: %v\n", g.fn.FilePath, err)
-			continue
-		}
-
 		// Get parent source from the file diff
 		fd, ok := fileDiffMap[g.fn.FilePath]
 		if !ok || len(fd.ParentSource) == 0 {
 			fmt.Printf("  Warning: no parent source for %s, skipping catching execution\n", g.fn.FilePath)
 			continue
+		}
+
+		// Get new source: from the commit (if available) or from disk
+		var newSource []byte
+		if len(fd.NewSource) > 0 {
+			newSource = fd.NewSource
+		} else {
+			var err error
+			newSource, err = os.ReadFile(g.fn.FilePath)
+			if err != nil {
+				fmt.Printf("  Warning: cannot read %s: %v\n", g.fn.FilePath, err)
+				continue
+			}
 		}
 
 		mutantMap := make(map[string]model.Mutant)
@@ -239,6 +278,10 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 			if err != nil {
 				fmt.Printf("  Warning: execution failed for %s: %v\n", t.TestName, err)
 				tr.FilteredReason = fmt.Sprintf("execution error: %v", err)
+			}
+			// Pass through telemetry context for the judge
+			if g.fn.TelemetryContext != "" {
+				tr.TelemetryContext = g.fn.TelemetryContext
 			}
 			result.Results = append(result.Results, tr)
 		}
@@ -268,16 +311,59 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 	return result, nil
 }
 
-// findModuleRoot walks up from dir until it finds a go.mod file.
-func findModuleRoot(dir string) (string, error) {
+// detectLanguage examines file diffs to determine the project language.
+// Returns Python if any .py files are present, otherwise Go.
+func detectLanguage(fileDiffs []model.FileDiff) lang.Language {
+	for _, fd := range fileDiffs {
+		name := fd.NewName
+		if name == "" {
+			name = fd.OldName
+		}
+		if strings.HasSuffix(name, ".py") {
+			return lang.NewPython()
+		}
+	}
+	return lang.NewGo()
+}
+
+// enrichWithTelemetry opens the telemetry database and enriches changed functions
+// with production telemetry context.
+func (p *Pipeline) enrichWithTelemetry(changedFuncs []model.ChangedFunc) error {
+	reader, err := telemetry.NewReader(p.opts.TelemetryDB)
+	if err != nil {
+		return fmt.Errorf("opening telemetry DB: %w", err)
+	}
+	defer reader.Close()
+
+	for i := range changedFuncs {
+		ft, err := reader.GetFunctionTelemetry(changedFuncs[i].Name, changedFuncs[i].FilePath)
+		if err != nil {
+			if p.opts.Verbose {
+				fmt.Printf("  Warning: telemetry lookup failed for %s: %v\n", changedFuncs[i].Name, err)
+			}
+			continue
+		}
+		if ft != nil {
+			changedFuncs[i].TelemetryContext = telemetry.FormatForPrompt(ft)
+		}
+	}
+	return nil
+}
+
+// findProjectRoot walks up from dir until it finds a project root marker.
+// Supports go.mod (Go), setup.py, pyproject.toml, or requirements.txt (Python).
+func findProjectRoot(dir string) (string, error) {
+	markers := []string{"go.mod", "setup.py", "pyproject.toml", "requirements.txt"}
 	current := dir
 	for {
-		if _, err := os.Stat(filepath.Join(current, "go.mod")); err == nil {
-			return current, nil
+		for _, marker := range markers {
+			if _, err := os.Stat(filepath.Join(current, marker)); err == nil {
+				return current, nil
+			}
 		}
 		parent := filepath.Dir(current)
 		if parent == current {
-			return dir, fmt.Errorf("no go.mod found (searched from %s to root)", dir)
+			return dir, fmt.Errorf("no project root found (searched from %s to root)", dir)
 		}
 		current = parent
 	}

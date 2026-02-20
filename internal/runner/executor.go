@@ -44,7 +44,17 @@ func (e *Executor) ExecuteCatching(test model.GeneratedTest, mutant model.Mutant
 	}
 
 	// Determine where to put the test file (same directory as the target file)
-	testRelPath := filepath.Join(filepath.Dir(relPath), fmt.Sprintf("snare_%s_test.go", strings.ToLower(test.TestName)))
+	// Language-aware naming: test_snare_<name>.py for Python, snare_<name>_test.go for Go
+	var testFileName string
+	if strings.HasSuffix(relPath, ".py") {
+		// LLM-generated Python test names already have test_ prefix; strip it to avoid double prefix
+		name := strings.ToLower(test.TestName)
+		name = strings.TrimPrefix(name, "test_")
+		testFileName = fmt.Sprintf("test_snare_%s.py", name)
+	} else {
+		testFileName = fmt.Sprintf("snare_%s_test.go", strings.ToLower(test.TestName))
+	}
+	testRelPath := filepath.Join(filepath.Dir(relPath), testFileName)
 
 	// Step 1: Run test against parent (old) code — must pass
 	td, err := NewTempDir(e.moduleDir)

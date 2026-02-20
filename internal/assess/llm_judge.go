@@ -121,10 +121,16 @@ func BuildJudgePrompt(result *model.TestResult, commitMessage ...string) string 
 func buildJudgePrompt(result *model.TestResult, commitMessage string) string {
 	var sb strings.Builder
 
+	// Detect language from test code
+	codeLang := "go"
+	if strings.Contains(result.Test.TestCode, "import pytest") || strings.Contains(result.Test.TestCode, "def test_") {
+		codeLang = "python"
+	}
+
 	sb.WriteString(`You are a code review expert assessing whether a test failure indicates a real bug or an expected behavior change.
 
 ## Test Code
-` + "```go\n" + result.Test.TestCode + "\n```\n\n")
+` + "```" + codeLang + "\n" + result.Test.TestCode + "\n```\n\n")
 
 	sb.WriteString("## Test passed on parent (old) code:\n```\n")
 	// Truncate output to avoid excessive tokens
@@ -153,6 +159,13 @@ func buildJudgePrompt(result *model.TestResult, commitMessage string) string {
 		sb.WriteString("\n\n")
 	}
 
+	if result.TelemetryContext != "" {
+		sb.WriteString("## Production Telemetry\n")
+		sb.WriteString("The following production telemetry data provides context about how this function is used:\n\n")
+		sb.WriteString(result.TelemetryContext)
+		sb.WriteString("\n\n")
+	}
+
 	sb.WriteString(`## Task
 
 Analyze whether this test failure represents:
@@ -172,6 +185,10 @@ Guidelines:
 - Score closer to -1.0: the failure is an expected consequence of the intended change
 - Score near 0: ambiguous, could go either way
 - The "question" should help the developer quickly decide if the change is intentional
+- If production telemetry is available, weigh it in your assessment:
+  - High-traffic functions with behavioral changes are more likely to be bugs (score higher)
+  - Functions with known exception patterns where the change addresses those exceptions may be intentional (score lower)
+  - Consider whether the change aligns with or contradicts production usage patterns
 `)
 
 	return sb.String()

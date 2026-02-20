@@ -96,7 +96,8 @@ func (f *FalsePositivePatterns) Assess(result *model.TestResult) {
 	// infrastructure_failure: test runner/infra issue
 	if strings.Contains(output, "cannot find package") ||
 		strings.Contains(output, "connection refused") ||
-		strings.Contains(output, "timeout") {
+		strings.Contains(output, "timed out") ||
+		strings.Contains(output, "Timeout >") {
 		result.Assessment -= 0.6
 		result.FilteredReason = "infrastructure failure"
 		result.IsCatching = false

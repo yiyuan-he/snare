@@ -46,6 +46,18 @@ func (e *Extractor) Extract(staged bool, commit string) ([]model.FileDiff, error
 		diffs[i].ParentSource = parentSrc
 	}
 
+	// For --commit mode, also fetch the new source from the commit
+	// (can't rely on the working directory which may be on a different branch)
+	if commit != "" {
+		for i := range diffs {
+			newSrc, err := e.getSourceAtCommit(diffs[i].NewName, commit)
+			if err != nil {
+				continue
+			}
+			diffs[i].NewSource = newSrc
+		}
+	}
+
 	return diffs, nil
 }
 
@@ -97,6 +109,22 @@ func (e *Extractor) getParentSource(filePath string, staged bool, commit string)
 	return out, nil
 }
 
+// getSourceAtCommit retrieves the file content at a specific commit.
+func (e *Extractor) getSourceAtCommit(absPath string, commit string) ([]byte, error) {
+	// Convert absolute path back to repo-relative path
+	relPath, err := filepath.Rel(e.Dir, absPath)
+	if err != nil {
+		return nil, fmt.Errorf("computing relative path: %w", err)
+	}
+	cmd := exec.Command("git", "show", commit+":"+relPath)
+	cmd.Dir = e.Dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show %s:%s: %w", commit, relPath, err)
+	}
+	return out, nil
+}
+
 // GetCommitMessage returns the commit message for context.
 // For a specific commit, it returns that commit's message.
 // For staged/unstaged changes, it returns the most recent commit message (HEAD).
@@ -127,11 +155,11 @@ func (e *Extractor) parse(raw string) ([]model.FileDiff, error) {
 			name = f.OldName
 		}
 
-		// Filter to .go files only, exclude test files
-		if !strings.HasSuffix(name, ".go") {
+		// Filter to supported source files, exclude test files
+		if !isSourceFile(name) {
 			continue
 		}
-		if strings.HasSuffix(name, "_test.go") {
+		if isTestFile(name) {
 			continue
 		}
 
@@ -170,4 +198,24 @@ func (e *Extractor) parse(raw string) ([]model.FileDiff, error) {
 		}
 	}
 	return result, nil
+}
+
+// isSourceFile returns true if the file is a supported source file.
+func isSourceFile(name string) bool {
+	return strings.HasSuffix(name, ".go") || strings.HasSuffix(name, ".py")
+}
+
+// isTestFile returns true if the file is a test file in any supported language.
+func isTestFile(name string) bool {
+	if strings.HasSuffix(name, "_test.go") {
+		return true
+	}
+	base := filepath.Base(name)
+	if strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py") {
+		return true
+	}
+	if strings.HasSuffix(name, "_test.py") {
+		return true
+	}
+	return false
 }

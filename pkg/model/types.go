@@ -8,6 +8,7 @@ type FileDiff struct {
 	NewName      string
 	Hunks        []Hunk
 	ParentSource []byte // full file content at parent revision
+	NewSource    []byte // full file content at new revision (for --commit mode)
 }
 
 // Hunk represents a contiguous block of changes within a file diff.
@@ -21,18 +22,19 @@ type Hunk struct {
 
 // ChangedFunc represents a function whose body overlaps with a diff hunk.
 type ChangedFunc struct {
-	FilePath        string
-	Package         string
-	Name            string
-	Signature       string
-	Body            string
-	StartLine       int
-	EndLine         int
-	Imports         []string
-	TypeDefs        []string
-	DiffContext     string // the relevant diff hunks for this function
-	ParentSignature string // function signature in parent revision
-	ParentBody      string // function body in parent revision
+	FilePath         string
+	Package          string
+	Name             string
+	Signature        string
+	Body             string
+	StartLine        int
+	EndLine          int
+	Imports          []string
+	TypeDefs         []string
+	DiffContext      string // the relevant diff hunks for this function
+	ParentSignature  string // function signature in parent revision
+	ParentBody       string // function body in parent revision
+	TelemetryContext string // production telemetry context (if available)
 }
 
 // Risk represents a potential bug risk identified by the LLM.
@@ -70,18 +72,19 @@ type CatchingLLMResponse struct {
 
 // TestResult represents the outcome of running a generated test.
 type TestResult struct {
-	Test           GeneratedTest `json:"test"`
-	Mutant         Mutant        `json:"mutant"`
-	PassParent     bool          `json:"pass_parent"`
-	FailDiff       bool          `json:"fail_diff"`
-	IsCatching     bool          `json:"is_catching"`
-	ParentOutput   string        `json:"parent_output,omitempty"`
-	DiffOutput     string        `json:"diff_output,omitempty"`
-	BehaviorChange string        `json:"behavior_change,omitempty"`
-	Question       string        `json:"question,omitempty"`
-	Assessment     float64       `json:"assessment"`
-	Confidence     float64       `json:"confidence"`
-	FilteredReason string        `json:"filtered_reason,omitempty"`
+	Test             GeneratedTest `json:"test"`
+	Mutant           Mutant        `json:"mutant"`
+	PassParent       bool          `json:"pass_parent"`
+	FailDiff         bool          `json:"fail_diff"`
+	IsCatching       bool          `json:"is_catching"`
+	ParentOutput     string        `json:"parent_output,omitempty"`
+	DiffOutput       string        `json:"diff_output,omitempty"`
+	BehaviorChange   string        `json:"behavior_change,omitempty"`
+	Question         string        `json:"question,omitempty"`
+	Assessment       float64       `json:"assessment"`
+	Confidence       float64       `json:"confidence"`
+	FilteredReason   string        `json:"filtered_reason,omitempty"`
+	TelemetryContext string        `json:"telemetry_context,omitempty"`
 }
 
 // CatchSummary aggregates test results for a single risk/mutant pair.

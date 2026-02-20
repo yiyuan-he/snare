@@ -94,7 +94,12 @@ func (g *Go) RunTest(dir string, testFile string, testFunc string, timeout time.
 	// Determine the package directory from the test file
 	pkgDir := filepath.Dir(testFile)
 
-	args := []string{"test", "-v", "-count=1", fmt.Sprintf("-timeout=%s", timeout), "-run", fmt.Sprintf("^%s$", testFunc), pkgDir}
+	// Use "./" prefix so Go treats the path as a local directory, not a module import path
+	localPkg := "./" + pkgDir
+	if pkgDir == "." {
+		localPkg = "./"
+	}
+	args := []string{"test", "-v", "-count=1", fmt.Sprintf("-timeout=%s", timeout), "-run", fmt.Sprintf("^%s$", testFunc), localPkg}
 	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
 

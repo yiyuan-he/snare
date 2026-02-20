@@ -63,6 +63,13 @@ func (td *TempDir) OverwriteFile(relPath string, content []byte) error {
 
 	info, err := os.Lstat(topLevelPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// New file that doesn't exist in the original module — just write it directly
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return fmt.Errorf("creating parent dir: %w", err)
+			}
+			return os.WriteFile(target, content, 0o644)
+		}
 		return fmt.Errorf("stat %s: %w", topLevelPath, err)
 	}
 
@@ -98,6 +105,13 @@ func (td *TempDir) OverwriteFile(relPath string, content []byte) error {
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return fmt.Errorf("creating parent dir: %w", err)
+	}
+
+	// Remove any file-level symlink so we don't write through to the original
+	if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		if err := os.Remove(target); err != nil {
+			return fmt.Errorf("removing file symlink %s: %w", target, err)
+		}
 	}
 
 	return os.WriteFile(target, content, 0o644)

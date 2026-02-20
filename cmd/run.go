@@ -22,24 +22,25 @@ var runCmd = &cobra.Command{
 }
 
 var (
-	flagStaged   bool
-	flagCommit   string
-	flagDir      string
-	flagModel    string
-	flagMaxTests int
-	flagVerbose  bool
-	flagDryRun   bool
-	flagTimeout  time.Duration
-	flagBedrock  bool
-	flagJSON     bool
-	flagFormat   string
+	flagStaged    bool
+	flagCommit    string
+	flagDir       string
+	flagModel     string
+	flagMaxTests  int
+	flagVerbose   bool
+	flagDryRun    bool
+	flagTimeout   time.Duration
+	flagBedrock   bool
+	flagJSON      bool
+	flagFormat    string
+	flagTelemetry string
 )
 
 func init() {
 	runCmd.Flags().BoolVar(&flagStaged, "staged", false, "Only analyze staged changes")
 	runCmd.Flags().StringVar(&flagCommit, "commit", "", "Analyze changes from a specific commit")
 	runCmd.Flags().StringVar(&flagDir, "dir", ".", "Working directory (defaults to current)")
-	runCmd.Flags().StringVar(&flagModel, "model", "claude-sonnet-4-5-20250929", "Claude model to use")
+	runCmd.Flags().StringVar(&flagModel, "model", "us.anthropic.claude-opus-4-6-v1", "Claude model to use")
 	runCmd.Flags().IntVar(&flagMaxTests, "max-tests", 0, "Maximum number of tests to generate (0 = unlimited)")
 	runCmd.Flags().BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose output")
 	runCmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Generate tests but don't execute them")
@@ -47,6 +48,7 @@ func init() {
 	runCmd.Flags().BoolVar(&flagBedrock, "bedrock", false, "Use Amazon Bedrock instead of the Anthropic API")
 	runCmd.Flags().BoolVar(&flagJSON, "json", false, "Output results as JSON")
 	runCmd.Flags().StringVar(&flagFormat, "format", "text", "Output format: text, json, github")
+	runCmd.Flags().StringVar(&flagTelemetry, "telemetry", "", "Path to telemetry SQLite database for enriched analysis")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -71,16 +73,17 @@ func runJiT(cmd *cobra.Command, args []string) error {
 	}
 
 	opts := pipeline.Options{
-		Dir:      flagDir,
-		Staged:   flagStaged,
-		Commit:   flagCommit,
-		Model:    flagModel,
-		MaxTests: flagMaxTests,
-		Verbose:  flagVerbose && format == "text",
-		DryRun:   flagDryRun,
-		Timeout:  flagTimeout,
-		APIKey:   apiKey,
-		Bedrock:  flagBedrock,
+		Dir:         flagDir,
+		Staged:      flagStaged,
+		Commit:      flagCommit,
+		Model:       flagModel,
+		MaxTests:    flagMaxTests,
+		Verbose:     flagVerbose && format == "text",
+		DryRun:      flagDryRun,
+		Timeout:     flagTimeout,
+		APIKey:      apiKey,
+		Bedrock:     flagBedrock,
+		TelemetryDB: flagTelemetry,
 	}
 
 	p := pipeline.New(opts)
