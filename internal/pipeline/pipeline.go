@@ -186,6 +186,8 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 		}
 	}
 
+	result.GenerationUsage = gen.TokenUsage()
+
 	if len(generated) == 0 {
 		fmt.Println("No tests were generated.")
 		result.Duration = time.Since(start)
@@ -293,6 +295,7 @@ func (p *Pipeline) Run(ctx context.Context) (*model.PipelineResult, error) {
 	}
 	chain := assess.DefaultCatchingChain(gen.Client(), p.opts.Model, ctx, p.opts.Verbose, p.opts.CommitMessage)
 	result.Results = chain.Evaluate(result.Results)
+	result.AssessmentUsage = chain.TokenUsage()
 
 	// Count weak/strong catches and filtered
 	for _, r := range result.Results {

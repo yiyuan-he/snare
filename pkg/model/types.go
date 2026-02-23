@@ -89,13 +89,20 @@ type TestResult struct {
 
 // CatchSummary aggregates test results for a single risk/mutant pair.
 type CatchSummary struct {
-	Risk           Risk
-	Mutant         Mutant
-	Tests          []TestResult
-	IsWeakCatch    bool
-	Assessment     float64 // aggregated -1 to 1
-	BehaviorChange string
-	Question       string // "Is it expected that..." question for the developer
+	Risk             Risk
+	Mutant           Mutant
+	Tests            []TestResult
+	IsWeakCatch      bool
+	Assessment       float64 // aggregated -1 to 1
+	BehaviorChange   string
+	Question         string // "Is it expected that..." question for the developer
+	TelemetryContext string // production telemetry context (if available)
+}
+
+// TokenUsage tracks API token consumption for a pipeline stage.
+type TokenUsage struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
 }
 
 // PipelineResult holds the overall result of a pipeline run.
@@ -112,4 +119,6 @@ type PipelineResult struct {
 	Results          []TestResult  `json:"results"`
 	Duration         time.Duration `json:"duration"`
 	Intent           string        `json:"intent,omitempty"`
+	GenerationUsage  TokenUsage    `json:"generation_usage"`
+	AssessmentUsage  TokenUsage    `json:"assessment_usage"`
 }

@@ -50,6 +50,22 @@ func DefaultRuleOnlyChain() *Chain {
 	)
 }
 
+// TokenUsage returns the accumulated token usage from all assessors that track tokens.
+func (c *Chain) TokenUsage() model.TokenUsage {
+	var total model.TokenUsage
+	for _, a := range c.assessors {
+		type tokenReporter interface {
+			TokenUsage() model.TokenUsage
+		}
+		if tr, ok := a.(tokenReporter); ok {
+			u := tr.TokenUsage()
+			total.InputTokens += u.InputTokens
+			total.OutputTokens += u.OutputTokens
+		}
+	}
+	return total
+}
+
 // Evaluate runs all assessors on each result.
 func (c *Chain) Evaluate(results []model.TestResult) []model.TestResult {
 	for i := range results {

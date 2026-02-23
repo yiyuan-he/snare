@@ -19,6 +19,7 @@ type Generator struct {
 	lang     lang.Language
 	maxTests int
 	verbose  bool
+	usage    model.TokenUsage
 }
 
 // NewGenerator creates a new LLM-based test generator.
@@ -104,6 +105,9 @@ func (g *Generator) callAndParse(ctx context.Context, prompt string, fn model.Ch
 		return "", nil, nil, nil, fmt.Errorf("Claude API call: %w", err)
 	}
 
+	g.usage.InputTokens += resp.Usage.InputTokens
+	g.usage.OutputTokens += resp.Usage.OutputTokens
+
 	// Extract text from response
 	var text string
 	for _, block := range resp.Content {
@@ -150,6 +154,9 @@ func (g *Generator) callAndParse(ctx context.Context, prompt string, fn model.Ch
 
 	return llmResp.Intent, llmResp.Risks, llmResp.Mutants, llmResp.Tests, nil
 }
+
+// TokenUsage returns the accumulated token usage across all API calls.
+func (g *Generator) TokenUsage() model.TokenUsage { return g.usage }
 
 func stripCodeFences(s string) string {
 	s = strings.TrimSpace(s)

@@ -120,6 +120,39 @@ direct Anthropic API and won't work with Bedrock).
 - Use `--verbose` to see which tests were attempted for uncaught mutations and full test code for caught ones.
 - Use `--dry-run` to inspect the generated mutants and tests without executing anything.
 
+## Reassess: controlled telemetry experiments
+
+The `reassess` command re-runs only the assessment stage on a saved JSON result,
+holding tests and execution output constant. This lets you isolate the effect of
+telemetry context on the LLM judge.
+
+```bash
+# 1. Run the full pipeline with telemetry and save JSON
+snare run --commit refactor-utils --bedrock --telemetry ./telemetry.db --format json > baseline.json
+
+# 2. Reassess WITH telemetry context (judge sees production data)
+snare reassess baseline.json --bedrock --output with-telemetry.md
+
+# 3. Reassess WITHOUT telemetry context (judge is blind to production data)
+snare reassess baseline.json --bedrock --no-telemetry --output without-telemetry.md
+```
+
+Comparing the two reports gives you:
+- **Token delta** — pure overhead of including telemetry in judge prompts
+- **Score delta** — whether telemetry helps the judge distinguish real bugs from false positives
+
+### Reassess flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--no-telemetry` | `false` | Strip telemetry context before assessment |
+| `--model <name>` | `us.anthropic.claude-opus-4-6-v1` | Claude model for the LLM judge |
+| `--bedrock` | `false` | Use Amazon Bedrock instead of the Anthropic API |
+| `-v`, `--verbose` | `false` | Show detailed output |
+| `--format <fmt>` | `text` | Output format: text, json, github |
+| `--output <path>` | | Write markdown report to file |
+| `--json` | `false` | Shorthand for `--format json` |
+
 ## License
 
 MIT

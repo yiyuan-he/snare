@@ -17,6 +17,7 @@ type LLMJudge struct {
 	ctx           context.Context
 	verbose       bool
 	commitMessage string
+	usage         model.TokenUsage
 }
 
 // NewLLMJudge creates a new LLM-based assessor.
@@ -57,6 +58,9 @@ func (j *LLMJudge) Assess(result *model.TestResult) {
 		}
 		return // Keep existing assessment on failure
 	}
+
+	j.usage.InputTokens += resp.Usage.InputTokens
+	j.usage.OutputTokens += resp.Usage.OutputTokens
 
 	var text string
 	for _, block := range resp.Content {
@@ -108,6 +112,9 @@ func (j *LLMJudge) Assess(result *model.TestResult) {
 			result.Test.TestName, ruleScore, llmScore, combined)
 	}
 }
+
+// TokenUsage returns the accumulated token usage across all Assess calls.
+func (j *LLMJudge) TokenUsage() model.TokenUsage { return j.usage }
 
 // BuildJudgePrompt constructs the prompt for the LLM judge. Exported for testing.
 func BuildJudgePrompt(result *model.TestResult, commitMessage ...string) string {
